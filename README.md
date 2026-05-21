@@ -45,13 +45,6 @@ Sinta-se à vontade para abrir issues ou enviar pull requests.
 
 ---
 
-## License
-
-Distribuído sob a licença MIT.  
-Consulte o arquivo `LICENSE` para mais informações.
-
----
-
 ## Disclaimer
 
 Diagrama Studio é um projeto independente e experimental.
