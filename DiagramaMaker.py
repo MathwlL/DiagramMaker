@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 SQL Diagram Tool
 """
@@ -13,9 +12,8 @@ try:
 except ImportError:
     PIL_OK = False
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SQL PARSING
-# ══════════════════════════════════════════════════════════════════════════════
+
+#  SQL 
 
 def _extract_table_bodies(sql):
     results = []
@@ -141,8 +139,7 @@ def dedupe_relations(relations):
 def tables_to_sql(tables, relations):
     """Convert the internal tables/relations structure back to SQL."""
     lines = []
-    # Build FK map from relations
-    fk_info = {}  # (table, col) -> (ref_table, ref_col)
+    fk_info = {}
     for rel in relations:
         fk_info[(rel["from"], rel.get("from_col", ""))] = (rel["to"], rel.get("to_col", ""))
     for tname, cols in tables.items():
@@ -169,9 +166,7 @@ def tables_to_sql(tables, relations):
         lines.append(");\n")
     return "\n".join(lines)
 
-# ══════════════════════════════════════════════════════════════════════════════
 #  LAYOUT
-# ══════════════════════════════════════════════════════════════════════════════
 
 def auto_layout(tables, relations, cw=1600, ch=1100):
     names = list(tables.keys()); n = len(names)
@@ -206,9 +201,7 @@ def auto_layout(tables, relations, cw=1600, ch=1100):
             pos[nm][1] = max(60, min(ch-140, pos[nm][1] + max(-25, min(25, forces[nm][1]))))
     return {nm: (int(p[0]), int(p[1])) for nm, p in pos.items()}
 
-# ══════════════════════════════════════════════════════════════════════════════
 #  THEMES
-# ══════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_THEMES = {
     "Dark Blue": {
@@ -241,7 +234,7 @@ DEFAULT_THEMES = {
         "text": "#657B83", "sub": "#93A1A1", "border": "#073642",
         "rel": "#268BD2", "sel": "#DC322F", "grid": "#DDD8C4", "shadow": "#C9C3B0"
     },
-    "Custom": {}  # filled by user
+    "Custom": {}
 }
 
 TH = dict(DEFAULT_THEMES["Dark Blue"])
@@ -326,10 +319,6 @@ FONT_COL  = ("Segoe UI", 8)
 FONT_TYPE = ("Segoe UI", 7)
 FONT_CARD = ("Segoe UI", 8, "bold")
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  NOTATION DRAWING
-# ══════════════════════════════════════════════════════════════════════════════
-
 def _draw_crow_foot(canvas, x, y, dx, dy, cardinality, color, scale):
     L = 14 * scale
     length = math.hypot(dx, dy)
@@ -404,9 +393,7 @@ NOTATION_FUNS = {
 }
 DIAGRAM_MODES = ["Conceitual", "Logico", "Fisico"]
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ER CANVAS
-# ══════════════════════════════════════════════════════════════════════════════
+#CANVAS
 
 class ERCanvas(tk.Canvas):
     def __init__(self, master, app, **kw):
@@ -425,8 +412,7 @@ class ERCanvas(tk.Canvas):
         self._pan_rel_origin = []
         self._selected_relation = None
         self._drag_waypoint = None
-        # cardinality label drag
-        self._drag_label   = None   # (rel_index, "from"|"to")
+        self._drag_label   = None
         self._drag_label_start = (0, 0)
         self._drag_label_offset_start = [0, 0]
 
@@ -638,7 +624,6 @@ class ERCanvas(tk.Canvas):
             vx2 = pts[-2][0]-stx; vy2 = pts[-2][1]-sty
             draw_fn = NOTATION_FUNS.get(notation)
 
-            # label offsets (movable)
             off = rel.get("label_offset", [0, 0])
             off_from = rel.get("label_offset_from", [0, 0])
             off_to   = rel.get("label_offset_to", [0, 0])
@@ -647,7 +632,6 @@ class ERCanvas(tk.Canvas):
                 draw_fn(self, sfx, sfy, vx1, vy1, rel.get("card_from","1,1"), TH["rel"], self._scale)
                 draw_fn(self, stx, sty, vx2, vy2, rel.get("card_to","0,n"),   TH["rel"], self._scale)
 
-            # draw movable cardinality labels
             card_fs = max(6, int(8*self._scale))
             lx_from, ly_from = self._card_label_pos(rel, "from", pts)
             lx_to, ly_to = self._card_label_pos(rel, "to", pts)
@@ -677,8 +661,6 @@ class ERCanvas(tk.Canvas):
                     self.create_rectangle(swx-r, swy-r, swx+r, swy+r,
                                           fill=TH["table_bg"], outline=TH["sel"], width=2,
                                           tags=("route_handle", f"rel_{idx}_wp_{wp_index}"))
-
-    # ── hit testing ─────────────────────────────────────────────────────────
 
     def _find_table_at(self, cx, cy):
         for name in self.tables:
@@ -732,10 +714,7 @@ class ERCanvas(tk.Canvas):
                     best_dist = dist
         return best
 
-    # ── mouse events ─────────────────────────────────────────────────────────
-
     def _on_press(self, event):
-        # Check cardinality label drag first
         hit = self._find_card_label_at(event.x, event.y)
         if hit:
             self.app._push_undo()
@@ -848,7 +827,7 @@ class ERCanvas(tk.Canvas):
         self._scale = max(0.15, min(3.5, self._scale+d))
         self.redraw()
 
-    # ── popups ───────────────────────────────────────────────────────────────
+    #popups 
 
     def _edit_relation(self, idx, rx, ry):
         rel = self.relations[idx]
@@ -937,9 +916,7 @@ class ERCanvas(tk.Canvas):
         popup.bind("<Return>", lambda e: ok())
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SETTINGS PANEL
-# ══════════════════════════════════════════════════════════════════════════════
+#  SETTINGS
 
 class SettingsPanel(tk.Frame):
     COLOR_KEYS = [
@@ -969,7 +946,6 @@ class SettingsPanel(tk.Frame):
         tk.Label(self, text="Personalize colors, fonts, and diagram look.", bg="#0F1729", fg="#607090",
                 font=("Segoe UI", 9)).pack(anchor="w", padx=20, pady=(0,14))
 
-        # ── Theme presets ──────────────────────────────────────────────────
         tf = tk.LabelFrame(self, text="  Theme Presets  ", bg="#0F1729", fg="#90A8C8",
                           font=("Segoe UI",9,"bold"), bd=1, relief="groove")
         tf.pack(fill="x", padx=20, pady=(0,12))
@@ -980,7 +956,6 @@ class SettingsPanel(tk.Frame):
                      font=("Segoe UI",8), relief="flat", padx=10, pady=4, cursor="hand2",
                      command=lambda n=name: self._apply_preset(n)).pack(side="left", padx=4)
 
-        # ── Color pickers ──────────────────────────────────────────────────
         cf = tk.LabelFrame(self, text="  Custom Colors  ", bg="#0F1729", fg="#90A8C8",
                           font=("Segoe UI",9,"bold"), bd=1, relief="groove")
         cf.pack(fill="both", expand=True, padx=20, pady=(0,12))
@@ -1016,7 +991,6 @@ class SettingsPanel(tk.Frame):
                      cursor="hand2").pack(side="left", padx=2)
             var.trace_add("write", lambda *a, k=key, sw=swatch, v=var: self._update_color(k, v, sw))
 
-        # ── Font size ──────────────────────────────────────────────────────
         ff = tk.LabelFrame(self, text="  Table Width  ", bg="#0F1729", fg="#90A8C8",
                           font=("Segoe UI",9,"bold"), bd=1, relief="groove")
         ff.pack(fill="x", padx=20, pady=(0,12))
@@ -1041,7 +1015,6 @@ class SettingsPanel(tk.Frame):
         global TH
         TH = dict(DEFAULT_THEMES[name])
         self.app.theme_var.set(name)
-        # update swatches
         for key, var in self._color_vars.items():
             var.set(TH.get(key, "#FFFFFF"))
         self.app.er_canvas.redraw()
@@ -1060,9 +1033,8 @@ class SettingsPanel(tk.Frame):
         self.app.er_canvas.redraw()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  VISUAL BUILDER (GUI table/relation builder, no SQL)
-# ══════════════════════════════════════════════════════════════════════════════
+#  VISUAL BUILDER 
+
 
 COL_TYPES = ["INT", "VARCHAR(100)", "VARCHAR(50)", "VARCHAR(20)", "TEXT",
              "DECIMAL(10,2)", "DATE", "DATETIME", "BOOLEAN", "FLOAT", "BIGINT", "CHAR(1)"]
@@ -1077,7 +1049,6 @@ class VisualBuilder(tk.Frame):
         self._build()
 
     def _build(self):
-        # ── Left: table list + add table ──────────────────────────────────
         left = tk.Frame(self, bg="#0D1526", width=220)
         left.pack(side="left", fill="y", padx=0)
         left.pack_propagate(False)
@@ -1095,7 +1066,8 @@ class VisualBuilder(tk.Frame):
         self._icon_btn(btn_row, "＋ Add Table", self._add_table).pack(side="left", fill="x", expand=True)
         self._icon_btn(btn_row, "✕ Delete", self._delete_table, color="#E53935").pack(side="left", padx=(4,0))
 
-        # ── Middle: column editor ─────────────────────────────────────────
+        # ── COLLUM EDITOR / EDITOR DE COLUNAS ─────────────────────────────────────────
+
         mid = tk.Frame(self, bg="#0F1729")
         mid.pack(side="left", fill="both", expand=True, padx=0)
 
@@ -1103,7 +1075,6 @@ class VisualBuilder(tk.Frame):
                                   font=("Segoe UI",10,"bold"))
         self.col_label.pack(anchor="w", padx=16, pady=(14,4))
 
-        # Column treeview
         cols_frame = tk.Frame(mid, bg="#0F1729")
         cols_frame.pack(fill="both", expand=True, padx=16)
         cols_vsb = ttk.Scrollbar(cols_frame, orient="vertical")
@@ -1117,7 +1088,6 @@ class VisualBuilder(tk.Frame):
             self.col_tree.heading(col, text=col.upper())
             self.col_tree.column(col, width=w, anchor="center" if col in ("pk","fk") else "w")
 
-        # Add column controls
         add_row = tk.Frame(mid, bg="#0F1729"); add_row.pack(fill="x", padx=16, pady=4)
         tk.Label(add_row, text="Name:", bg="#0F1729", fg="#90A8C8", font=("Segoe UI",9)).pack(side="left")
         self._col_name = tk.StringVar()
@@ -1133,7 +1103,7 @@ class VisualBuilder(tk.Frame):
         self._icon_btn(add_row, "＋ Column", self._add_column).pack(side="left", padx=4)
         self._icon_btn(add_row, "✕ Del Col", self._delete_column, color="#E53935").pack(side="left")
 
-        # ── Right: relations editor ───────────────────────────────────────
+        # ── Relations Editor / Editor de Relações ───────────────────────────────────────
         right = tk.Frame(self, bg="#0D1526", width=280)
         right.pack(side="right", fill="y", padx=0)
         right.pack_propagate(False)
@@ -1173,10 +1143,7 @@ class VisualBuilder(tk.Frame):
         br = tk.Frame(right, bg="#0D1526"); br.pack(fill="x", padx=8, pady=4)
         self._icon_btn(br, "＋ Add Relation", self._add_relation).pack(fill="x", pady=2)
         self._icon_btn(br, "✕ Del Relation", self._delete_relation, color="#E53935").pack(fill="x", pady=2)
-
-        # ── Bottom: generate buttons ──────────────────────────────────────
         bot = tk.Frame(self, bg="#0F1729")
-        # pack at bottom via a frame trick
         bot2 = tk.Frame(mid, bg="#0F1729"); bot2.pack(fill="x", padx=16, pady=8)
         self._icon_btn(bot2, "🖥 Send to Diagram", self._send_to_diagram, color="#059669").pack(side="left", padx=4)
         self._icon_btn(bot2, "📋 Generate SQL", self._generate_sql, color="#7C3AED").pack(side="left", padx=4)
@@ -1190,7 +1157,6 @@ class VisualBuilder(tk.Frame):
         tables = self.app.er_canvas.tables
         for t in tables:
             self.table_listbox.insert("end", t)
-        # update relation combos
         names = list(tables.keys())
         self._rel_from_cb["values"] = names
         self._rel_to_cb["values"] = names
@@ -1363,9 +1329,8 @@ class VisualBuilder(tk.Frame):
             self._refresh_col_tree(self._selected_table)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MAIN APP
-# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN APP / APLICATIVO
+
 
 EXAMPLE_SQL = """\
 -- SQL Example
@@ -1425,10 +1390,12 @@ class App(tk.Tk):
         self.sql_editor.insert("1.0", EXAMPLE_SQL)
         self._generate()
 
-    # ── UI ───────────────────────────────────────────────────────────────────
+    # UI
 
     def _build_ui(self):
-        # ── Top bar ──────────────────────────────────────────────────────────
+
+        # Top Bar \ Barra Superior 
+
         topbar = tk.Frame(self, bg=UI["hud_bg"], height=52)
         topbar.pack(fill="x", side="top"); topbar.pack_propagate(False)
 
@@ -1450,11 +1417,9 @@ class App(tk.Tk):
         btn("📂 Load SQL",     self._load_file)
         btn("💾 Save SQL",     self._save_file)
 
-        # Export menu
         exp_btn = btn("🖼 Export ▾", None, "#374151")
         exp_btn.configure(command=lambda: self._show_export_menu(exp_btn))
 
-        # ── Second bar ────────────────────────────────────────────────────────
         bar2 = tk.Frame(self, bg=UI["hud_bg_2"], height=36)
         bar2.pack(fill="x", side="top"); bar2.pack_propagate(False)
 
@@ -1483,7 +1448,7 @@ class App(tk.Tk):
                        bg=UI["hud_bg_2"], fg=UI["dim"], font=("Segoe UI",8))
         hint.pack(side="right", padx=8)
 
-        # ── Notebook ──────────────────────────────────────────────────────────
+        #Notebook 
         style = ttk.Style()
         style.theme_use("default")
         style.configure("TNotebook", background=UI["hud_bg"], borderwidth=0)
@@ -1496,12 +1461,12 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
 
-        # Tab 1: SQL Editor
+        # SQL Editor
         self.tab_sql = tk.Frame(self.notebook, bg="#0D1526")
         self.notebook.add(self.tab_sql, text="  📝 SQL Editor  ")
         self._build_sql_tab()
 
-        # Tab 2: ER Diagram
+        # Diagram
         self.tab_diagram = tk.Frame(self.notebook, bg=TH["bg"])
         self.notebook.add(self.tab_diagram, text="  🔗 ER Diagram  ")
         self._build_diagram_toolbar()
@@ -1512,18 +1477,17 @@ class App(tk.Tk):
         self.er_canvas.pack(side="left", fill="both", expand=True)
         self._build_inspector_panel()
 
-        # Tab 3: Visual Builder
+        # Visual Builder
         self.tab_builder = tk.Frame(self.notebook, bg="#0F1729")
         self.notebook.add(self.tab_builder, text="  🛠 Visual Builder  ")
         self.visual_builder = VisualBuilder(self.tab_builder, self)
         self.visual_builder.pack(fill="both", expand=True)
 
-        # Tab 4: Settings
+        # Settings
         self.tab_settings = tk.Frame(self.notebook, bg="#0F1729")
         self.notebook.add(self.tab_settings, text="  ⚙ Settings  ")
         SettingsPanel(self.tab_settings, self).pack(fill="both", expand=True)
 
-        # ── Status ───────────────────────────────────────────────────────────
         self.status = tk.Label(self, text="Ready. Load SQL or use the Visual Builder.", bg=UI["hud_bg_2"],
                               fg=UI["muted"], font=("Segoe UI",8), anchor="w")
         self.status.pack(fill="x", side="bottom")
@@ -1608,10 +1572,8 @@ class App(tk.Tk):
 
     def _on_tab_change(self, event):
         tab = self.notebook.index(self.notebook.select())
-        if tab == 2:  # Visual Builder
+        if tab == 2:
             self.visual_builder.on_show()
-
-    # ── Actions ──────────────────────────────────────────────────────────────
 
     def _bind_shortcuts(self):
         for seq in ("<Control-z>", "<Control-Z>"):
@@ -1959,12 +1921,10 @@ class App(tk.Tk):
             filetypes=[(fmt.upper(), f"*.{ext}"), ("All","*.*")])
         if not path: return
 
-        # Export via PostScript → PIL conversion
         with tempfile.NamedTemporaryFile(suffix=".ps", delete=False) as tmp:
             ps_path = tmp.name
         try:
             self.er_canvas.postscript(file=ps_path, colormode="color")
-            # Try Ghostscript for PS→PNG
             png_path = ps_path.replace(".ps", ".png")
             result = subprocess.run(
                 ["gs", "-dNOPAUSE", "-dBATCH", "-sDEVICE=png16m", "-r150",
@@ -1982,7 +1942,6 @@ class App(tk.Tk):
                 self.status.config(text=f"✔ Exported {fmt.upper()}: {path}")
                 os.unlink(png_path)
             else:
-                # Fallback: save PS and inform user
                 import shutil
                 shutil.copy(ps_path, path.replace(f".{ext}", ".ps"))
                 messagebox.showinfo("Ghostscript not found",
@@ -1990,7 +1949,6 @@ class App(tk.Tk):
                     "A .ps file was saved instead — you can open it in any PS viewer.")
                 self.status.config(text="⚠ Ghostscript not found; saved as PostScript.")
         except FileNotFoundError:
-            # gs not installed
             self._export_ps_fallback(path, ext)
         finally:
             if os.path.exists(ps_path): os.unlink(ps_path)
