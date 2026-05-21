@@ -25,7 +25,7 @@ O objetivo do projeto é simplificar a criação, visualização e documentaçã
 
 ---
 
-##Preview
+## Preview
 
 ![Preview](assets/Preview.png)
 
@@ -34,7 +34,7 @@ O objetivo do projeto é simplificar a criação, visualização e documentaçã
 
 Baixe a versão mais recente do instalador:
 
-[⬇ Download Diagrama Studio](https://github.com/seu-usuario/diagrama-studio/releases/DiagramaMakerInstaller.exe)
+[⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/raw/refs/heads/master/releases/DiagramaMakerInstaller.exe)
 
 ---
 
@@ -42,13 +42,6 @@ Baixe a versão mais recente do instalador:
 
 Contribuições, melhorias e sugestões são bem-vindas.  
 Sinta-se à vontade para abrir issues ou enviar pull requests.
-
----
-
-## License
-
-Distribuído sob a licença MIT.  
-Consulte o arquivo `LICENSE` para mais informações.
 
 ---
 
