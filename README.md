@@ -34,7 +34,7 @@ O objetivo do projeto é simplificar a criação, visualização e documentaçã
 
 Baixe a versão mais recente do instalador:
 
-[⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/releases/DiagramaMakerInstaller.exe)
+[⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/raw/refs/heads/master/releases/DiagramaMakerInstaller.exe)
 
 ---
 
