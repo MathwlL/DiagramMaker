@@ -6,6 +6,8 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog, colorchooser
 import re, math, json, copy, subprocess, os, tempfile, sys
 
+from core.nosql import LocalJsonProvider, make_project
+
 try:
     from PIL import Image, ImageGrab
     PIL_OK = True
@@ -384,6 +386,14 @@ def _draw_simple(canvas, x, y, dx, dy, cardinality, color, scale):
     canvas.create_text(lx, ly, text=f"({cardinality})", fill=color,
                        font=(FONT_CARD[0], max(6, int(FONT_CARD[1]*scale)), FONT_CARD[2]))
 
+def _format_cardinality(cardinality, notation):
+    card = cardinality.replace(" ", "").lower()
+    if notation == "UML":
+        return {"1,1": "1", "0,1": "0..1", "1,n": "1..*", "0,n": "0..*"}.get(card, cardinality)
+    if notation == "Chen":
+        return {"1,1": "1", "0,1": "0..1", "1,n": "N", "0,n": "0..N"}.get(card, cardinality)
+    return f"({cardinality})"
+
 NOTATION_FUNS = {
     "None": None,
     "Simple (a,b)": _draw_simple,
@@ -545,40 +555,100 @@ class ERCanvas(tk.Canvas):
                                 anchor="e", tags=("table", name))
             fy += rh
 
-    def _edge_point_toward(self, name, target_x, target_y):
+    def _column_anchor_y(self, name, col_name):
+        if not col_name:
+            return None
+        cols = self.tables.get(name, [])
+        for i, col in enumerate(cols):
+            if col.get("name", "").upper() == col_name.upper():
+                return self.positions[name][1] + HEADER_H + i*ROW_H + ROW_H/2
+        return None
+
+    def _edge_point_toward(self, name, target_x, target_y, preferred_col=None, slot_offset=0):
         x, y   = self.positions[name]
         w = TABLE_W; h = self._table_height(name)
         cx, cy = x+w/2, y+h/2
         dx, dy = target_x-cx, target_y-cy
         if abs(dx) >= abs(dy):
-            if dx >= 0: return x+w, y+h/2, 1, 0
-            else:       return x,   y+h/2, -1, 0
+            ay = self._column_anchor_y(name, preferred_col) or y+h/2
+            ay = max(y+HEADER_H/2, min(y+h-PAD, ay + slot_offset))
+            if dx >= 0: return x+w, ay, 1, 0
+            else:       return x,   ay, -1, 0
         else:
-            if dy >= 0: return x+w/2, y+h, 0, 1
-            else:       return x+w/2, y,   0, -1
+            ax = max(x+PAD, min(x+w-PAD, x+w/2 + slot_offset))
+            if dy >= 0: return ax, y+h, 0, 1
+            else:       return ax, y,   0, -1
 
-    def _edge_point(self, name, other_name):
+    def _edge_point(self, name, other_name, preferred_col=None, slot_offset=0):
         ox, oy = self.positions[other_name]
-        return self._edge_point_toward(name, ox+TABLE_W/2, oy+self._table_height(other_name)/2)
+        return self._edge_point_toward(name, ox+TABLE_W/2, oy+self._table_height(other_name)/2,
+                                       preferred_col, slot_offset)
 
-    def _relation_points(self, rel):
+    def _relation_slot_offsets(self, rel_index, rel):
+        def side_for(table, other):
+            x, y = self.positions[table]
+            ox, oy = self.positions[other]
+            dx = ox + TABLE_W/2 - (x + TABLE_W/2)
+            dy = oy + self._table_height(other)/2 - (y + self._table_height(table)/2)
+            if abs(dx) >= abs(dy):
+                return "right" if dx >= 0 else "left"
+            return "bottom" if dy >= 0 else "top"
+
+        result = []
+        for endpoint, table_key, other_key in [("from", "from", "to"), ("to", "to", "from")]:
+            table = rel[table_key]
+            other = rel[other_key]
+            side = side_for(table, other)
+            siblings = []
+            for i, r in enumerate(self.relations):
+                if r.get(table_key) == table and r.get(other_key) in self.positions:
+                    try:
+                        if side_for(r[table_key], r[other_key]) == side:
+                            siblings.append(i)
+                    except KeyError:
+                        pass
+            siblings.sort()
+            count = max(1, len(siblings))
+            rank = siblings.index(rel_index) if rel_index in siblings else 0
+            spacing = 18
+            result.append((rank - (count-1)/2) * spacing)
+        return result[0], result[1]
+
+    def _default_route(self, start, end):
+        fx, fy, fdx, fdy = start
+        tx, ty, tdx, tdy = end
+        if fdx and tdx:
+            gap = max(70, min(180, abs(tx-fx) * 0.45))
+            sx = fx + fdx * gap
+            ex = tx + tdx * gap
+            return [(fx, fy), (sx, fy), (sx, ty), (tx, ty)] if fdx == -tdx else [(fx, fy), (sx, fy), (ex, ty), (tx, ty)]
+        if fdy and tdy:
+            gap = max(70, min(180, abs(ty-fy) * 0.45))
+            sy = fy + fdy * gap
+            ey = ty + tdy * gap
+            return [(fx, fy), (fx, sy), (tx, sy), (tx, ty)] if fdy == -tdy else [(fx, fy), (fx, sy), (tx, ey), (tx, ty)]
+        p1 = (fx + fdx*70, fy + fdy*70) if fdx or fdy else (fx, fy)
+        p2 = (tx + tdx*70, ty + tdy*70) if tdx or tdy else (tx, ty)
+        return [(fx, fy), p1, (p1[0], p2[1]), p2, (tx, ty)]
+
+    def _relation_points(self, rel, rel_index=0):
         frm, to = rel["from"], rel["to"]
         waypoints = rel.get("waypoints") or []
+        from_slot, to_slot = self._relation_slot_offsets(rel_index, rel)
         if waypoints:
-            fx, fy, _, _ = self._edge_point_toward(frm, waypoints[0][0], waypoints[0][1])
-            tx, ty, _, _ = self._edge_point_toward(to, waypoints[-1][0], waypoints[-1][1])
+            fx, fy, fdx, fdy = self._edge_point_toward(frm, waypoints[0][0], waypoints[0][1], rel.get("from_col"), from_slot)
+            tx, ty, tdx, tdy = self._edge_point_toward(to, waypoints[-1][0], waypoints[-1][1], rel.get("to_col"), to_slot)
         else:
-            fx, fy, _, _ = self._edge_point(frm, to)
-            tx, ty, _, _ = self._edge_point(to, frm)
+            fx, fy, fdx, fdy = self._edge_point(frm, to, rel.get("from_col"), from_slot)
+            tx, ty, tdx, tdy = self._edge_point(to, frm, rel.get("to_col"), to_slot)
         if waypoints:
             pts = [(fx, fy)] + [(p[0], p[1]) for p in waypoints] + [(tx, ty)]
         else:
-            mx = (fx + tx) / 2
-            pts = [(fx, fy), (mx, fy), (mx, ty), (tx, ty)]
+            pts = self._default_route((fx, fy, fdx, fdy), (tx, ty, tdx, tdy))
         return pts
 
-    def _relation_canvas_points(self, rel):
-        return [(self._sx(x), self._sy(y)) for x, y in self._relation_points(rel)]
+    def _relation_canvas_points(self, rel, rel_index=0):
+        return [(self._sx(x), self._sy(y)) for x, y in self._relation_points(rel, rel_index)]
 
     def _flatten_points(self, pts):
         flat = []
@@ -598,10 +668,17 @@ class ERCanvas(tk.Canvas):
         length = max(1, math.hypot(dx, dy))
         ux, uy = dx / length, dy / length
         nx, ny = -uy, ux
-        return (
-            anchor[0] + ux*30*self._scale + nx*14*self._scale + off[0],
-            anchor[1] + uy*30*self._scale + ny*14*self._scale + off[1],
-        )
+        x = anchor[0] + ux*42*self._scale + nx*20*self._scale + off[0]
+        y = anchor[1] + uy*42*self._scale + ny*20*self._scale + off[1]
+        margin = 18*self._scale
+        for table in self.tables:
+            if table not in self.positions:
+                continue
+            x1, y1, x2, y2 = self._table_rect(table)
+            if x1-margin <= x <= x2+margin and y1-margin <= y <= y2+margin:
+                x += nx*34*self._scale
+                y += ny*34*self._scale
+        return x, y
 
     def _draw_relations(self):
         notation = self.app.notation_var.get()
@@ -609,7 +686,7 @@ class ERCanvas(tk.Canvas):
         for idx, rel in enumerate(self.relations):
             frm, to = rel["from"], rel["to"]
             if frm not in self.positions or to not in self.positions: continue
-            pts = self._relation_canvas_points(rel)
+            pts = self._relation_canvas_points(rel, idx)
             sfx, sfy = pts[0]
             stx, sty = pts[-1]
             mx = sum(p[0] for p in pts) / len(pts)
@@ -636,8 +713,8 @@ class ERCanvas(tk.Canvas):
             lx_from, ly_from = self._card_label_pos(rel, "from", pts)
             lx_to, ly_to = self._card_label_pos(rel, "to", pts)
 
-            cf_text = f"({rel.get('card_from','1,1')})"
-            ct_text = f"({rel.get('card_to','0,n')})"
+            cf_text = _format_cardinality(rel.get("card_from","1,1"), notation)
+            ct_text = _format_cardinality(rel.get("card_to","0,n"), notation)
 
             self.create_text(lx_from, ly_from, text=cf_text, fill=TH["rel"],
                             font=("Segoe UI", card_fs, "bold"),
@@ -675,7 +752,7 @@ class ERCanvas(tk.Canvas):
         for idx, rel in enumerate(self.relations):
             frm, to = rel["from"], rel["to"]
             if frm not in self.positions or to not in self.positions: continue
-            pts = self._relation_canvas_points(rel)
+            pts = self._relation_canvas_points(rel, idx)
             lx_from, ly_from = self._card_label_pos(rel, "from", pts)
             lx_to, ly_to = self._card_label_pos(rel, "to", pts)
 
@@ -706,7 +783,7 @@ class ERCanvas(tk.Canvas):
         for i, rel in enumerate(self.relations):
             frm, to = rel["from"], rel["to"]
             if frm not in self.positions or to not in self.positions: continue
-            pts = self._relation_canvas_points(rel)
+            pts = self._relation_canvas_points(rel, i)
             for seg_index in range(len(pts)-1):
                 dist, t = self._point_to_segment_distance(cx, cy, *pts[seg_index], *pts[seg_index+1])
                 if dist <= tol*self._scale and (best_dist is None or dist < best_dist):
@@ -1380,6 +1457,8 @@ class App(tk.Tk):
         self._positions = {}
         self._undo_stack = []
         self._max_undo = 60
+        self.project_store = LocalJsonProvider()
+        self.current_project_id = None
 
         self.diagram_mode  = tk.StringVar(value="Fisico")
         self.notation_var  = tk.StringVar(value="Simple (a,b)")
@@ -1394,38 +1473,52 @@ class App(tk.Tk):
 
     def _build_ui(self):
 
-        # Top Bar \ Barra Superior 
-
-        topbar = tk.Frame(self, bg=UI["hud_bg"], height=52)
+        topbar = tk.Frame(self, bg=UI["hud_bg"], height=28)
         topbar.pack(fill="x", side="top"); topbar.pack_propagate(False)
 
-        tk.Label(topbar, text="  ⬡  Diagrama Studio",
+        tk.Label(topbar, text="  Diagrama Studio",
                 bg=UI["hud_bg"], fg=UI["text"],
-                font=("Segoe UI", 14, "bold")).pack(side="left", padx=12)
+                font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 12))
+
+        def menu_btn(text, command=None):
+            tk.Button(topbar, text=text, command=command, bg=UI["hud_bg"], fg=UI["text"],
+                     activebackground=UI["hud_bg_2"], activeforeground=UI["text"],
+                     font=("Segoe UI",8), relief="flat", padx=8, pady=2,
+                     cursor="hand2").pack(side="left")
+
+        menu_btn("File")
+        menu_btn("Edit")
+        menu_btn("Diagram")
+        menu_btn("Render")
+        menu_btn("Window")
+        menu_btn("Help")
 
         def btn(text, cmd, color=None):
             color = color or UI["accent"]
             b = tk.Button(topbar, text=text, command=cmd, bg=color, fg="white",
-                         font=("Segoe UI",9,"bold"), relief="flat", padx=10, pady=5,
+                         font=("Segoe UI",8,"bold"), relief="flat", padx=8, pady=2,
                          activebackground="#1D4ED8", activeforeground="white", cursor="hand2")
-            b.pack(side="left", padx=3, pady=10)
+            b.pack(side="right", padx=2, pady=3)
             return b
 
-        btn("▶ Generate",      self._generate)
-        btn("⤢ Fit",           self._fit)
-        btn("↺ Reset Layout",  self._reset_layout)
-        btn("📂 Load SQL",     self._load_file)
-        btn("💾 Save SQL",     self._save_file)
-
-        exp_btn = btn("🖼 Export ▾", None, "#374151")
+        exp_btn = btn("Export ▾", None, UI["neutral"])
         exp_btn.configure(command=lambda: self._show_export_menu(exp_btn))
+        btn("Save", self._save_project, UI["neutral"])
+        btn("Open", self._open_project, UI["neutral"])
 
         bar2 = tk.Frame(self, bg=UI["hud_bg_2"], height=36)
         bar2.pack(fill="x", side="top"); bar2.pack_propagate(False)
 
+        for name, target in [("Layout", "tab_diagram"), ("SQL", "tab_sql"), ("Builder", "tab_builder"), ("Settings", "tab_settings")]:
+            tk.Button(bar2, text=name, bg=UI["hud_bg_2"], fg=UI["muted"],
+                     activebackground=UI["panel_bg"], activeforeground=UI["text"],
+                     font=("Segoe UI",8,"bold"), relief="flat", padx=10, pady=2,
+                     cursor="hand2",
+                     command=lambda t=target: self.notebook.select(getattr(self, t))).pack(side="left", padx=(2,0), pady=4)
+
         def lbl(text):
             tk.Label(bar2, text=text, bg=UI["hud_bg_2"], fg=UI["muted"],
-                    font=("Segoe UI",8)).pack(side="left", padx=(12,2), pady=6)
+                    font=("Segoe UI",8)).pack(side="left", padx=(16,2), pady=6)
 
         lbl("Mode:")
         for m in DIAGRAM_MODES:
@@ -1660,6 +1753,49 @@ class App(tk.Tk):
 
     def _builder_generate_sql_proxy(self):
         self.visual_builder._generate_sql()
+
+    def _project_payload(self):
+        return {
+            "tables": copy.deepcopy(self.er_canvas.tables),
+            "relations": copy.deepcopy(self.er_canvas.relations),
+            "positions": copy.deepcopy(self.er_canvas.positions),
+            "diagram_mode": self.diagram_mode.get(),
+            "notation": self.notation_var.get(),
+            "sql": self.sql_editor.get("1.0", "end"),
+        }
+
+    def _load_project_payload(self, payload):
+        self.diagram_mode.set(payload.get("diagram_mode", self.diagram_mode.get()))
+        self.notation_var.set(payload.get("notation", self.notation_var.get()))
+        self.sql_editor.delete("1.0", "end")
+        self.sql_editor.insert("1.0", payload.get("sql", ""))
+        self.er_canvas.load(
+            payload.get("tables", {}),
+            payload.get("relations", []),
+            payload.get("positions", {}),
+        )
+        self._refresh_counts()
+        self.notebook.select(self.tab_diagram)
+
+    def _save_project(self):
+        name = self.current_project_id or "diagram-project"
+        payload = self._project_payload()
+        if self.current_project_id:
+            project = self.project_store.update(self.current_project_id, payload)
+        else:
+            project = self.project_store.create(make_project(name, "er", payload))
+            self.current_project_id = project.id
+        self.status.config(text=f"Project saved: {project.name} v{project.version}")
+
+    def _open_project(self):
+        projects = self.project_store.list()
+        if not projects:
+            messagebox.showinfo("Projects", "No saved projects found.")
+            return
+        project = projects[-1]
+        self.current_project_id = project.id
+        self._load_project_payload(project.payload)
+        self.status.config(text=f"Project loaded: {project.name} v{project.version}")
 
     def _refresh_counts(self):
         nt = len(self.er_canvas.tables)

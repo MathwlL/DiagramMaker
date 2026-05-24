@@ -1,50 +1,37 @@
-![Preview](assets/Background.png)
-# Diagrama Studio
+# DiagramMaker
 
-Ferramenta desenvolvida em Python para conversão entre scripts SQL e modelagem de dados.  
-O objetivo do projeto é simplificar a criação, visualização e documentação de estruturas de banco de dados por meio de uma interface prática e intuitiva.
+Desktop tool for creating, editing, exporting, and persisting database diagrams.
 
----
+## Run
 
-## Requirements
+```powershell
+python main.py
+```
 
-- Windows
-- 1GB Ram
-- 100 MB storage 
+`main.py` is the supported entry point and contains the production Tk application.
 
----
+## Current Features
 
-## Features
+- SQL `CREATE TABLE` parsing
+- ER diagram rendering
+- Conceptual, logical, and physical display modes
+- Movable tables, relation labels, and relation bend points
+- Visual table/relation builder
+- SQL generation from the visual model
+- PNG/JPEG/PDF export through Pillow viewport capture
+- Project persistence through a NoSQL-style local JSON provider
+- Blender-inspired dark workspace with top bar, tool rail, canvas, inspector, and status area
 
-- Conversão de SQL para diagramas de banco de dados
-- Geração automática de scripts SQL a partir da modelagem
-- Suporte a relacionamentos entre tabelas
-- Interface intuitiva e focada em produtividade
-- Estrutura open source para estudos e contribuições
-- Exportação e organização visual da modelagem de dados
+## Project Persistence
 
----
+Projects are saved under `projects/` by `core.nosql.LocalJsonProvider`.
 
-## Preview
+The provider API is intentionally small so MongoDB, Firebase, Supabase, CouchDB, or DynamoDB providers can be added later without changing the UI.
 
-![Preview](assets/Preview.png)
+## Architecture Docs
 
----
-## Download
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Baixe a versão mais recente do instalador:
+## Build EXE
 
-[⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/raw/refs/heads/master/releases/DiagramaMakerInstaller.exe)
-
----
-
-## Contributing
-
-Contribuições, melhorias e sugestões são bem-vindas.  
-Sinta-se à vontade para abrir issues ou enviar pull requests.
-
----
-
-## Disclaimer
-
-Diagrama Studio é um projeto independente e experimental.
+Use the existing PyInstaller spec or build script from the project root. The executable output is generated under `dist/`.
