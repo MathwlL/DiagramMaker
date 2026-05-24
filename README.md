@@ -1,37 +1,50 @@
-# DiagramMaker
+![Preview](assets/Background.png)
+# Diagrama Studio
 
-Desktop tool for creating, editing, exporting, and persisting database diagrams.
+Ferramenta desenvolvida em Python para conversão entre scripts SQL e modelagem de dados.  
+O objetivo do projeto é simplificar a criação, visualização e documentação de estruturas de banco de dados por meio de uma interface prática e intuitiva.
 
-## Run
+---
 
-```powershell
-python main.py
-```
+## Requirements
 
-`main.py` is the supported entry point and contains the production Tk application.
+- Windows
+- 1GB Ram
+- 100 MB storage 
 
-## Current Features
+---
 
-- SQL `CREATE TABLE` parsing
-- ER diagram rendering
-- Conceptual, logical, and physical display modes
-- Movable tables, relation labels, and relation bend points
-- Visual table/relation builder
-- SQL generation from the visual model
-- PNG/JPEG/PDF export through Pillow viewport capture
-- Project persistence through a NoSQL-style local JSON provider
-- Blender-inspired dark workspace with top bar, tool rail, canvas, inspector, and status area
+## Features
 
-## Project Persistence
+- Conversão de SQL para diagramas de banco de dados
+- Geração automática de scripts SQL a partir da modelagem
+- Suporte a relacionamentos entre tabelas
+- Interface intuitiva e focada em produtividade
+- Estrutura open source para estudos e contribuições
+- Exportação e organização visual da modelagem de dados
 
-Projects are saved under `projects/` by `core.nosql.LocalJsonProvider`.
+---
 
-The provider API is intentionally small so MongoDB, Firebase, Supabase, CouchDB, or DynamoDB providers can be added later without changing the UI.
+## Preview
 
-## Architecture Docs
+![Preview](assets/Preview.png)
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+---
+## Download
 
-## Build EXE
+Baixe a versão mais recente do instalador (BETA):
 
-Use the existing PyInstaller spec or build script from the project root. The executable output is generated under `dist/`.
+[⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/raw/refs/heads/master/releases/DiagramaMakerInstaller.exe)
+
+---
+
+## Contributing
+
+Contribuições, melhorias e sugestões são bem-vindas.  
+Sinta-se à vontade para abrir issues ou enviar pull requests.
+
+---
+
+## Disclaimer
+
+Diagrama Studio é um projeto independente e experimental.
