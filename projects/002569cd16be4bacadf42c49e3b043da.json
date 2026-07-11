@@ -1,0 +1,182 @@
+{
+  "id": "002569cd16be4bacadf42c49e3b043da",
+  "name": "diagram-project",
+  "diagram_type": "er",
+  "payload": {
+    "tables": {
+      "USERS": [
+        {
+          "name": "ID",
+          "type": "INT",
+          "pk": true,
+          "fk": true,
+          "ref": "OKK"
+        },
+        {
+          "name": "NAME",
+          "type": "VARCHAR(100)",
+          "pk": false,
+          "fk": false,
+          "ref": null
+        },
+        {
+          "name": "EMAIL",
+          "type": "VARCHAR(100)",
+          "pk": false,
+          "fk": false,
+          "ref": null
+        }
+      ],
+      "PRODUCTS": [
+        {
+          "name": "ID",
+          "type": "INT",
+          "pk": true,
+          "fk": false,
+          "ref": null
+        },
+        {
+          "name": "PRODUCT_NAME",
+          "type": "VARCHAR(100)",
+          "pk": false,
+          "fk": false,
+          "ref": null
+        },
+        {
+          "name": "PRICE",
+          "type": "DECIMAL(10,2)",
+          "pk": false,
+          "fk": false,
+          "ref": null
+        }
+      ],
+      "ORDERS": [
+        {
+          "name": "ID",
+          "type": "INT",
+          "pk": true,
+          "fk": false,
+          "ref": null
+        },
+        {
+          "name": "USER_ID",
+          "type": "INT",
+          "pk": false,
+          "fk": true,
+          "ref": "USERS"
+        },
+        {
+          "name": "PRODUCT_ID",
+          "type": "INT",
+          "pk": false,
+          "fk": true,
+          "ref": "PRODUCTS"
+        },
+        {
+          "name": "ORDER_DATE",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "fk": false,
+          "ref": null
+        }
+      ],
+      "OKK": [
+        {
+          "name": "ID_OKK",
+          "type": "INT",
+          "pk": true,
+          "fk": false,
+          "ref": null
+        }
+      ]
+    },
+    "relations": [
+      {
+        "from": "ORDERS",
+        "from_col": "USER_ID",
+        "to": "USERS",
+        "to_col": "ID",
+        "card_from": "1,1",
+        "card_to": "0,n",
+        "label_offset": [
+          0,
+          0
+        ],
+        "label_offset_from": [
+          0,
+          0
+        ],
+        "label_offset_to": [
+          0,
+          0
+        ],
+        "waypoints": []
+      },
+      {
+        "from": "ORDERS",
+        "from_col": "PRODUCT_ID",
+        "to": "PRODUCTS",
+        "to_col": "ID",
+        "card_from": "1,1",
+        "card_to": "0,n",
+        "label_offset": [
+          0,
+          0
+        ],
+        "label_offset_from": [
+          0,
+          0
+        ],
+        "label_offset_to": [
+          0,
+          0
+        ],
+        "waypoints": []
+      },
+      {
+        "from": "USERS",
+        "from_col": "ID",
+        "to": "OKK",
+        "to_col": "ID_OKK",
+        "card_from": "1,1",
+        "card_to": "0,n",
+        "label_offset": [
+          0,
+          0
+        ],
+        "label_offset_from": [
+          0,
+          0
+        ],
+        "label_offset_to": [
+          0,
+          0
+        ]
+      }
+    ],
+    "positions": {
+      "USERS": [
+        769.3184318261718,
+        144.35611653568304
+      ],
+      "PRODUCTS": [
+        691.6713730026424,
+        522.0031753592125
+      ],
+      "ORDERS": [
+        168.59014050964504,
+        240.09841345445054
+      ],
+      "OKK": [
+        988.3208020050128,
+        361.328320802005
+      ]
+    },
+    "diagram_mode": "Fisico",
+    "notation": "Simple (a,b)",
+    "sql": "-- SQL Example\n\nCREATE DATABASE shop_db;\n\n-- Use database\nUSE shop_db;\n\n-- Users table\nCREATE TABLE users (\n    id INT PRIMARY KEY AUTO_INCREMENT,\n    name VARCHAR(100),\n    email VARCHAR(100) UNIQUE\n);\n\n-- Products table\nCREATE TABLE products (\n    id INT PRIMARY KEY AUTO_INCREMENT,\n    product_name VARCHAR(100),\n    price DECIMAL(10,2)\n);\n\n-- Orders table with relationships\nCREATE TABLE orders (\n    id INT PRIMARY KEY AUTO_INCREMENT,\n    user_id INT,\n    product_id INT,\n    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n\n    -- Relations\n    FOREIGN KEY (user_id) REFERENCES users(id),\n    FOREIGN KEY (product_id) REFERENCES products(id)\n);\n\n\n"
+  },
+  "version": 2,
+  "created_at": "2026-07-11T00:21:48.486862+00:00",
+  "updated_at": "2026-07-11T00:22:46.394834+00:00"
+}

@@ -6,10 +6,10 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog, colorchooser
 import re, math, json, copy, subprocess, os, tempfile, sys
 
-from core.nosql import LocalJsonProvider, make_project
+from core.nosql import DiagramProject, LocalJsonProvider, ProviderError, make_project
 
 try:
-    from PIL import Image, ImageGrab
+    from PIL import Image, ImageGrab, ImageTk
     PIL_OK = True
 except ImportError:
     PIL_OK = False
@@ -167,6 +167,87 @@ def tables_to_sql(tables, relations):
         lines.append(",\n".join(all_defs))
         lines.append(");\n")
     return "\n".join(lines)
+
+def tables_to_nosql(tables, relations, provider="MongoDB"):
+    """Generate starter NoSQL code from the current diagram model."""
+    provider = (provider or "MongoDB").lower()
+    rel_map = {}
+    for rel in relations:
+        rel_map.setdefault(rel.get("from"), []).append(rel)
+
+    def js_type(dtype):
+        dtype = (dtype or "").upper()
+        if any(x in dtype for x in ("INT", "DECIMAL", "FLOAT", "DOUBLE", "NUMERIC", "BIGINT")):
+            return "Number"
+        if any(x in dtype for x in ("BOOL", "BIT")):
+            return "Boolean"
+        if any(x in dtype for x in ("DATE", "TIME")):
+            return "Date"
+        if "JSON" in dtype:
+            return "Object"
+        return "String"
+
+    def sample_value(dtype):
+        kind = js_type(dtype)
+        return {
+            "Number": 0,
+            "Boolean": False,
+            "Date": "2026-01-01T00:00:00.000Z",
+            "Object": {},
+        }.get(kind, "")
+
+    if provider == "mongoose":
+        lines = ["const mongoose = require('mongoose');", ""]
+        for table, cols in tables.items():
+            lines.append(f"const {table.title().replace('_', '')}Schema = new mongoose.Schema({{")
+            for col in cols:
+                opts = [f"type: {js_type(col.get('type'))}"]
+                if col.get("pk"):
+                    opts.append("unique: true")
+                    opts.append("required: true")
+                if col.get("fk") or col.get("ref"):
+                    opts.append(f"ref: '{col.get('ref') or 'Document'}'")
+                lines.append(f"  {col['name'].lower()}: {{ {', '.join(opts)} }},")
+            for rel in rel_map.get(table, []):
+                if rel.get("card_to", "").lower().endswith("n"):
+                    lines.append(f"  {rel['to'].lower()}Refs: [{{ type: mongoose.Schema.Types.ObjectId, ref: '{rel['to']}' }}],")
+            lines.append("}, { timestamps: true });")
+            lines.append(f"module.exports.{table.title().replace('_', '')} = mongoose.model('{table}', {table.title().replace('_', '')}Schema);")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    if provider == "firebase":
+        data = {}
+        for table, cols in tables.items():
+            data[table.lower()] = {
+                "documentId": {
+                    col["name"].lower(): sample_value(col.get("type"))
+                    for col in cols
+                }
+            }
+        return json.dumps(data, indent=2, ensure_ascii=False)
+
+    lines = ["// MongoDB collection schema plan", ""]
+    for table, cols in tables.items():
+        lines.append(f"db.createCollection('{table.lower()}', {{")
+        lines.append("  validator: {")
+        lines.append("    $jsonSchema: {")
+        lines.append("      bsonType: 'object',")
+        lines.append(f"      title: '{table}',")
+        required = [c["name"].lower() for c in cols if c.get("pk")]
+        if required:
+            lines.append(f"      required: {json.dumps(required)},")
+        lines.append("      properties: {")
+        for col in cols:
+            kind = js_type(col.get("type"))
+            bson = {"Number": "number", "Boolean": "bool", "Date": "date", "Object": "object"}.get(kind, "string")
+            lines.append(f"        {col['name'].lower()}: {{ bsonType: '{bson}' }},")
+        lines.append("      }")
+        lines.append("    }")
+        lines.append("  }")
+        lines.append("});")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 #  LAYOUT
 
@@ -1452,6 +1533,23 @@ class App(tk.Tk):
         self.geometry("1440x900")
         self.configure(bg=UI["hud_bg"])
         self.minsize(900, 600)
+        self._set_window_icon()
+        # Custom chrome: instead of overrideredirect() (which pulls the
+        # window entirely out of Windows' window-manager control — no
+        # taskbar entry, no Alt-Tab, and it can drop behind other windows
+        # on focus loss with no way back, which looks exactly like the
+        # app closing), we strip only the native title bar from the real
+        # window style on Windows. The window stays fully WM-managed:
+        # normal taskbar entry, normal Alt-Tab, normal focus/stacking
+        # behavior. Maximize is handled manually (see _toggle_maximize)
+        # since removing the caption also breaks Windows' own taskbar-
+        # aware zoom logic.
+        self.use_custom_chrome = (sys.platform == "win32")
+        if self.use_custom_chrome:
+            self.update_idletasks()
+            self._strip_native_titlebar()
+            self._is_maximized = False
+            self.bind("<Configure>", self._on_root_configure, add="+")
 
         self._parsed    = {"tables":{}, "relations":[]}
         self._positions = {}
@@ -1459,10 +1557,14 @@ class App(tk.Tk):
         self._max_undo = 60
         self.project_store = LocalJsonProvider()
         self.current_project_id = None
+        self.current_project_path = None
+        self._window_restore_geometry = None
+        self._icon_images = {}
 
         self.diagram_mode  = tk.StringVar(value="Fisico")
         self.notation_var  = tk.StringVar(value="Simple (a,b)")
         self.theme_var     = tk.StringVar(value="Dark Blue")
+        self.nosql_provider_var = tk.StringVar(value="MongoDB")
 
         self._build_ui()
         self._bind_shortcuts()
@@ -1471,14 +1573,261 @@ class App(tk.Tk):
 
     # UI
 
+    def _resource_path(self, *parts):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base, *parts)
+
+    def _set_window_icon(self):
+        icon_path = self._resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                self.iconbitmap(icon_path)
+            except tk.TclError:
+                pass
+
+    def _load_icon(self, name, size=22):
+        key = (name, size)
+        if key in self._icon_images:
+            return self._icon_images[key]
+        path = self._resource_path("ui", "Icons", name)
+        if not os.path.exists(path):
+            return None
+        try:
+            if PIL_OK:
+                img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+            else:
+                photo = tk.PhotoImage(file=path)
+                if photo.width() > size:
+                    photo = photo.subsample(max(1, photo.width() // size))
+            self._icon_images[key] = photo
+            return photo
+        except Exception:
+            return None
+
+    def _strip_native_titlebar(self):
+        """Remove the native title bar from the real Windows window style,
+        while leaving the window otherwise fully managed by the OS (still
+        appears in the taskbar and Alt-Tab, and Windows still handles
+        stacking/focus normally)."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            GWL_STYLE = -16
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            style = (style & ~WS_CAPTION) | WS_THICKFRAME
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        except Exception:
+            pass
+
+    def _set_thickframe(self, enabled):
+        """Toggle the resizable-border style bit. We turn it off while
+        maximized so the window sits perfectly flush with the work area
+        instead of showing a sliver of resize-border/dead space around
+        the edges (which is what made the old maximize look 'fake')."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            GWL_STYLE = -16
+            WS_THICKFRAME = 0x00040000
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            style = (style | WS_THICKFRAME) if enabled else (style & ~WS_THICKFRAME)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        except Exception:
+            pass
+
+    def _start_window_drag(self, event):
+        if getattr(self, "_is_maximized", False):
+            # Real Windows apps restore-then-drag when you grab a
+            # maximized window's title bar; do the same instead of
+            # dragging the full work-area-sized window around.
+            self._toggle_maximize()
+            self.update_idletasks()
+        self._drag_start = (event.x_root, event.y_root, self.winfo_x(), self.winfo_y())
+
+    def _drag_window(self, event):
+        if not hasattr(self, "_drag_start"):
+            return
+        sx, sy, wx, wy = self._drag_start
+        self.geometry(f"+{wx + event.x_root - sx}+{wy + event.y_root - sy}")
+
+    def _minimize_window(self):
+        self.iconify()
+
+    def _get_work_area(self):
+        """Return (x, y, width, height) of the work area (screen minus
+        taskbar) of whichever monitor the window currently sits on."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                class RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
+                                ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+                MONITOR_DEFAULTTONEAREST = 2
+                hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+                info = MONITORINFO()
+                info.cbSize = ctypes.sizeof(MONITORINFO)
+                if ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    r = info.rcWork
+                    return r.left, r.top, r.right - r.left, r.bottom - r.top
+            except Exception:
+                pass
+        return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight()
+
+    def _toggle_maximize(self):
+        if getattr(self, "_is_maximized", False):
+            self._set_thickframe(True)
+            if self._window_restore_geometry:
+                self.geometry(self._window_restore_geometry)
+                self._window_restore_geometry = None
+            self._is_maximized = False
+        else:
+            self._window_restore_geometry = self.geometry()
+            self._set_thickframe(False)
+            x, y, w, h = self._get_work_area()
+            self.geometry(f"{w}x{h}+{x}+{y}")
+            self._is_maximized = True
+        self._refresh_maximize_icon()
+
+    def _on_root_configure(self, event):
+        # Safety net: if Windows itself maximizes/snaps the window (Aero
+        # Snap to the top edge, Win+Up, etc.) our own state/icon/border
+        # handling wouldn't know about it. Detect that and reconcile.
+        if event.widget is not self:
+            return
+        if getattr(self, "_is_maximized", False):
+            return
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        if self.winfo_width() >= sw and self.winfo_height() >= sh:
+            self.after(10, self._sync_after_os_maximize)
+
+    def _sync_after_os_maximize(self):
+        if getattr(self, "_is_maximized", False):
+            return
+        self._window_restore_geometry = self._window_restore_geometry or "1440x900"
+        self._is_maximized = True
+        self._set_thickframe(False)
+        x, y, w, h = self._get_work_area()
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self._refresh_maximize_icon()
+
+    def _refresh_maximize_icon(self):
+        pass  # replaced with a real redraw once the title bar is built
+
+    def _build_title_bar(self):
+        BAR_BG = "#0B1220"
+        titlebar = tk.Frame(self, bg=BAR_BG, height=36)
+        titlebar.pack(fill="x", side="top")
+        titlebar.pack_propagate(False)
+
+        drag_targets = [titlebar]
+
+        icon = self._load_icon("Iconn.png", 18)
+        if icon:
+            icon_lbl = tk.Label(titlebar, image=icon, bg=BAR_BG)
+            icon_lbl.pack(side="left", padx=(12, 8))
+            drag_targets.append(icon_lbl)
+
+        title = tk.Label(titlebar, text="Diagrama Studio", bg=BAR_BG, fg=UI["text"],
+                         font=("Segoe UI", 10, "bold"))
+        title.pack(side="left")
+        drag_targets.append(title)
+
+        self.project_title_label = tk.Label(titlebar, text="Untitled Project", bg=BAR_BG,
+                                            fg=UI["muted"], font=("Segoe UI", 9))
+        self.project_title_label.pack(side="left", padx=(10, 0))
+        drag_targets.append(self.project_title_label)
+
+        for w in drag_targets:
+            w.bind("<ButtonPress-1>", self._start_window_drag)
+            w.bind("<B1-Motion>", self._drag_window)
+            w.bind("<Double-Button-1>", lambda e: self._toggle_maximize())
+
+        def win_btn(kind, cmd, hover):
+            w, h = 46, 36
+            wrap = tk.Frame(titlebar, bg=BAR_BG, width=w, height=h, cursor="hand2")
+            wrap.pack(side="right", fill="y")
+            wrap.pack_propagate(False)
+            cv = tk.Canvas(wrap, width=w, height=h, bg=BAR_BG,
+                            highlightthickness=0, cursor="hand2")
+            cv.pack(fill="both", expand=True)
+            color = UI["text"]
+
+            def draw():
+                cv.delete("all")
+                cx, cy, s = w // 2, h // 2, 5
+                if kind == "minimize":
+                    cv.create_line(cx - s, cy, cx + s, cy, fill=color, width=1)
+                elif kind == "maximize":
+                    if getattr(self, "_is_maximized", False):
+                        off = 3
+                        cv.create_rectangle(cx - s + off, cy - s, cx + s, cy + s - off,
+                                            outline=color, width=1, fill=BAR_BG)
+                        cv.create_rectangle(cx - s, cy - s + off, cx + s - off, cy + s,
+                                            outline=color, width=1, fill=BAR_BG)
+                    else:
+                        cv.create_rectangle(cx - s, cy - s, cx + s, cy + s,
+                                            outline=color, width=1)
+                elif kind == "close":
+                    cv.create_line(cx - s, cy - s, cx + s, cy + s, fill=color, width=1)
+                    cv.create_line(cx - s, cy + s, cx + s, cy - s, fill=color, width=1)
+
+            draw()
+            if kind == "maximize":
+                self._refresh_maximize_icon = draw
+
+            def on_enter(_e):
+                wrap.config(bg=hover); cv.config(bg=hover)
+            def on_leave(_e):
+                wrap.config(bg=BAR_BG); cv.config(bg=BAR_BG)
+            def on_click(_e):
+                cmd()
+
+            for widget in (wrap, cv):
+                widget.bind("<Enter>", on_enter)
+                widget.bind("<Leave>", on_leave)
+                widget.bind("<Button-1>", on_click)
+            return wrap
+
+        win_btn("close", self.destroy, UI["danger"])
+        win_btn("maximize", self._toggle_maximize, UI["neutral"])
+        win_btn("minimize", self._minimize_window, UI["neutral"])
+
     def _build_ui(self):
+
+        if self.use_custom_chrome:
+            self._build_title_bar()
 
         topbar = tk.Frame(self, bg=UI["hud_bg"], height=28)
         topbar.pack(fill="x", side="top"); topbar.pack_propagate(False)
-
-        tk.Label(topbar, text="  Diagrama Studio",
-                bg=UI["hud_bg"], fg=UI["text"],
-                font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 12))
 
         def menu_btn(text, items):
             b = tk.Button(topbar, text=text, bg=UI["hud_bg"], fg=UI["text"],
@@ -1501,9 +1850,15 @@ class App(tk.Tk):
             ("New Diagram", self._new_diagram, "Ctrl+N"),
             ("Open Project", self._open_project, ""),
             ("Save Project", self._save_project, ""),
+            ("Save Project As", self._save_project_as, ""),
             None,
             ("Load SQL", self._load_file, "Ctrl+O"),
             ("Save SQL", self._save_file, "Ctrl+S"),
+            None,
+            ("Export PNG", lambda: self._export_image("png"), ""),
+            ("Export JPEG", lambda: self._export_image("jpeg"), ""),
+            ("Export PostScript", self._export_ps, ""),
+            ("Export PDF", lambda: self._export_image("pdf"), ""),
         ])
         menu_btn("Edit", [
             ("Undo", self._undo, "Ctrl+Z"),
@@ -1515,6 +1870,7 @@ class App(tk.Tk):
         menu_btn("Diagram", [
             ("Generate Diagram", self._generate, "Ctrl+G"),
             ("SQL to Builder", self._sql_to_builder, ""),
+            ("Generate NoSQL Code", self._generate_nosql_code, ""),
             None,
             ("Add Table", self._diagram_add_table, ""),
             ("Add Relation", self._diagram_add_relation, ""),
@@ -1530,18 +1886,6 @@ class App(tk.Tk):
             ("About Diagrama Studio", self._show_about, ""),
         ])
 
-        def btn(text, cmd, color=None):
-            color = color or UI["accent"]
-            b = tk.Button(topbar, text=text, command=cmd, bg=color, fg="white",
-                         font=("Segoe UI",8,"bold"), relief="flat", padx=8, pady=2,
-                         activebackground="#1D4ED8", activeforeground="white", cursor="hand2")
-            b.pack(side="right", padx=2, pady=3)
-            return b
-
-        exp_btn = btn("Export ▾", None, UI["neutral"])
-        exp_btn.configure(command=lambda: self._show_export_menu(exp_btn))
-        btn("Save", self._save_project, UI["neutral"])
-        btn("Open", self._open_project, UI["neutral"])
 
         bar2 = tk.Frame(self, bg=UI["hud_bg_2"], height=36)
         bar2.pack(fill="x", side="top"); bar2.pack_propagate(False)
@@ -1593,12 +1937,12 @@ class App(tk.Tk):
 
         # SQL Editor
         self.tab_sql = tk.Frame(self.notebook, bg="#0D1526")
-        self.notebook.add(self.tab_sql, text="  📝 SQL Editor  ")
+        self.notebook.add(self.tab_sql, text="  SQL Editor  ")
         self._build_sql_tab()
 
         # Diagram
         self.tab_diagram = tk.Frame(self.notebook, bg=TH["bg"])
-        self.notebook.add(self.tab_diagram, text="  🔗 ER Diagram  ")
+        self.notebook.add(self.tab_diagram, text="  ER Diagram  ")
         self._build_diagram_toolbar()
         self.diagram_body = tk.Frame(self.tab_diagram, bg=UI["hud_bg"])
         self.diagram_body.pack(fill="both", expand=True)
@@ -1609,14 +1953,22 @@ class App(tk.Tk):
 
         # Visual Builder
         self.tab_builder = tk.Frame(self.notebook, bg="#0F1729")
-        self.notebook.add(self.tab_builder, text="  🛠 Visual Builder  ")
+        self.notebook.add(self.tab_builder, text="  Visual Builder  ")
         self.visual_builder = VisualBuilder(self.tab_builder, self)
         self.visual_builder.pack(fill="both", expand=True)
 
         # Settings
         self.tab_settings = tk.Frame(self.notebook, bg="#0F1729")
-        self.notebook.add(self.tab_settings, text="  ⚙ Settings  ")
+        self.notebook.add(self.tab_settings, text="  Settings  ")
         SettingsPanel(self.tab_settings, self).pack(fill="both", expand=True)
+
+        # The topbar above already has buttons that call notebook.select(...)
+        # for each of these tabs, so the notebook's own clickable tab strip
+        # is redundant. Hide the tab headers (not the tabs themselves) —
+        # .select() still works from code, only the visible row of tab
+        # buttons goes away.
+        for tab_id in self.notebook.tabs():
+            self.notebook.tab(tab_id, state="hidden")
 
         self.status = tk.Label(self, text="Ready. Load SQL or use the Visual Builder.", bg=UI["hud_bg_2"],
                               fg=UI["muted"], font=("Segoe UI",8), anchor="w")
@@ -1635,8 +1987,15 @@ class App(tk.Tk):
 
         sbtn("▶ Generate Diagram", self._generate)
         sbtn("📋 SQL → Builder",   self._sql_to_builder, "#059669")
+        sbtn("NoSQL Code", self._generate_nosql_code, "#7C3AED")
         sbtn("📂 Load File",       self._load_file)
         sbtn("💾 Save File",       self._save_file)
+
+        tk.Label(btn_row, text="NoSQL:", bg=UI["panel_bg"], fg=UI["muted"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=(14, 3))
+        ttk.Combobox(btn_row, textvariable=self.nosql_provider_var,
+                     values=("MongoDB", "Mongoose", "Firebase"), width=11,
+                     state="readonly").pack(side="left", padx=3)
 
         tk.Label(top, text="Paste or write your SQL CREATE TABLE statements here:",
                 bg=UI["panel_bg"], fg=UI["muted"], font=("Segoe UI",8)).pack(anchor="w", padx=12, pady=(0,4))
@@ -1667,20 +2026,23 @@ class App(tk.Tk):
         rail.pack(side="left", fill="y")
         rail.pack_propagate(False)
 
-        def tool(text, cmd, tip):
-            b = tk.Button(rail, text=text, command=cmd, bg=UI["panel_bg"], fg=UI["text"],
+        def tool(icon_name, fallback, cmd, tip):
+            icon = self._load_icon(icon_name, 28) if icon_name else None
+            b = tk.Button(rail, text=fallback if not icon else "", image=icon, command=cmd,
+                         bg=UI["panel_bg"], fg=UI["text"],
                          activebackground=UI["accent"], activeforeground=UI["text"],
-                         relief="flat", font=("Segoe UI",10,"bold"), cursor="hand2")
+                         relief="flat", font=("Segoe UI",10,"bold"), cursor="hand2",
+                         compound="center")
             b.pack(fill="x", padx=6, pady=4, ipady=6)
             b.bind("<Enter>", lambda e: self.status.config(text=tip))
             return b
 
-        tool("T", self._diagram_add_table, "Add table")
-        tool("R", self._diagram_add_relation, "Add relation")
-        tool("F", self._fit, "Fit canvas")
-        tool("+", lambda: self._zoom_canvas(0.12), "Zoom in")
-        tool("-", lambda: self._zoom_canvas(-0.12), "Zoom out")
-        tool("Del", lambda: self._diagram_delete_selected(confirm=False), "Delete selected table or relation")
+        tool("PlusTable.png", "+", self._diagram_add_table, "Add table")
+        tool("RelationTable.png", "R", self._diagram_add_relation, "Add relation")
+        tool("FitTable.png", "F", self._fit, "Fit canvas")
+        tool(None, "+", lambda: self._zoom_canvas(0.12), "Zoom in")
+        tool(None, "-", lambda: self._zoom_canvas(-0.12), "Zoom out")
+        tool("DeleteTable.png", "Del", lambda: self._diagram_delete_selected(confirm=False), "Delete selected table or relation")
 
     def _build_inspector_panel(self):
         panel = tk.Frame(self.diagram_body, bg=UI["panel_bg"], width=240)
@@ -1816,25 +2178,76 @@ class App(tk.Tk):
         self._refresh_counts()
         self.notebook.select(self.tab_diagram)
 
-    def _save_project(self):
-        name = self.current_project_id or "diagram-project"
-        payload = self._project_payload()
+    def _set_project_title(self, name=None):
+        if not hasattr(self, "project_title_label"):
+            return
+        if not name and self.current_project_path:
+            name = os.path.splitext(os.path.basename(self.current_project_path))[0]
+        self.project_title_label.config(text=name or "Untitled Project")
+
+    def _sync_project_store(self, project):
+        try:
+            existing = self.project_store.get(project.id)
+            if existing:
+                self.project_store.update(project.id, project.payload)
+            else:
+                self.project_store.create(project)
+        except ProviderError:
+            self.project_store.create(project)
+
+    def _project_file_payload(self):
+        name = "Untitled Project"
+        if self.current_project_path:
+            name = os.path.splitext(os.path.basename(self.current_project_path))[0]
+        elif self.current_project_id:
+            name = self.current_project_id
+        project = make_project(name, "er", self._project_payload())
         if self.current_project_id:
-            project = self.project_store.update(self.current_project_id, payload)
-        else:
-            project = self.project_store.create(make_project(name, "er", payload))
-            self.current_project_id = project.id
-        self.status.config(text=f"Project saved: {project.name} v{project.version}")
+            project.id = self.current_project_id
+        return project
+
+    def _write_project_file(self, path):
+        project = self._project_file_payload()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(project.to_dict(), f, indent=2, ensure_ascii=False)
+        self.current_project_id = project.id
+        self.current_project_path = path
+        self._sync_project_store(project)
+        self._set_project_title(project.name)
+        self.status.config(text=f"Project saved: {path}")
+
+    def _save_project(self):
+        if not self.current_project_path:
+            return self._save_project_as()
+        self._write_project_file(self.current_project_path)
+
+    def _save_project_as(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".dgmproj",
+            filetypes=[("Diagrama project", "*.dgmproj"), ("JSON project", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self._write_project_file(path)
 
     def _open_project(self):
-        projects = self.project_store.list()
-        if not projects:
-            messagebox.showinfo("Projects", "No saved projects found.")
+        path = filedialog.askopenfilename(
+            filetypes=[("Diagrama project", "*.dgmproj"), ("JSON project", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
             return
-        project = projects[-1]
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            project = DiagramProject.from_dict(data)
+        except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
+            messagebox.showerror("Open Project", f"Could not open project:\n{exc}")
+            return
         self.current_project_id = project.id
+        self.current_project_path = path
+        self._sync_project_store(project)
         self._load_project_payload(project.payload)
-        self.status.config(text=f"Project loaded: {project.name} v{project.version}")
+        self._set_project_title(project.name)
+        self.status.config(text=f"Project loaded: {path}")
 
     def _new_diagram(self):
         if self.er_canvas.tables or self.sql_editor.get("1.0", "end").strip():
@@ -1842,11 +2255,13 @@ class App(tk.Tk):
                 return "break"
             self._push_undo()
         self.current_project_id = None
+        self.current_project_path = None
         self.sql_editor.delete("1.0", "end")
         self.er_canvas.load({}, [], {})
         self._refresh_counts()
         if hasattr(self, "visual_builder"):
             self.visual_builder.on_show()
+        self._set_project_title()
         self.notebook.select(self.tab_diagram)
         self.status.config(text="New diagram.")
         return "break"
@@ -1894,18 +2309,32 @@ class App(tk.Tk):
     def _diagram_add_table(self):
         popup = tk.Toplevel(self)
         popup.title("Add Table")
-        popup.configure(bg="#1A2340")
+        popup.configure(bg=UI["panel_bg"])
         popup.resizable(False, False)
         popup.grab_set()
-        tk.Label(popup, text="Table name", bg="#1A2340", fg="white",
-                font=("Segoe UI",10,"bold")).pack(anchor="w", padx=14, pady=(12,4))
+        popup.transient(self)
+        popup.geometry("+%d+%d" % (self.winfo_rootx() + 120, self.winfo_rooty() + 120))
+
+        header = tk.Frame(popup, bg=UI["hud_bg_2"])
+        header.pack(fill="x")
+        tk.Label(header, text="Create Table", bg=UI["hud_bg_2"], fg=UI["text"],
+                font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=18, pady=(14, 2))
+        tk.Label(header, text="Add a new entity to the ER diagram.", bg=UI["hud_bg_2"], fg=UI["muted"],
+                font=("Segoe UI", 8)).pack(anchor="w", padx=18, pady=(0, 12))
+
+        body = tk.Frame(popup, bg=UI["panel_bg"])
+        body.pack(fill="both", padx=18, pady=14)
+        tk.Label(body, text="Table name", bg=UI["panel_bg"], fg=UI["muted"],
+                font=("Segoe UI",9,"bold")).pack(anchor="w", pady=(0, 5))
         name_var = tk.StringVar()
-        entry = tk.Entry(popup, textvariable=name_var, font=("Segoe UI",10), width=28)
-        entry.pack(padx=14, pady=4)
+        entry = tk.Entry(body, textvariable=name_var, font=("Segoe UI",10), width=34,
+                         bg=UI["hud_bg"], fg=UI["text"], insertbackground="white", relief="flat")
+        entry.pack(fill="x", ipady=6)
         add_id = tk.BooleanVar(value=True)
-        tk.Checkbutton(popup, text="Create ID primary key", variable=add_id,
-                      bg="#1A2340", fg="#E2E8F0", selectcolor="#2563EB",
-                      activebackground="#1A2340", activeforeground="white").pack(anchor="w", padx=12)
+        tk.Checkbutton(body, text="Create ID primary key", variable=add_id,
+                      bg=UI["panel_bg"], fg=UI["text"], selectcolor=UI["accent"],
+                      activebackground=UI["panel_bg"], activeforeground="white",
+                      font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 0))
 
         def ok():
             name = _norm_name(name_var.get())
@@ -1926,9 +2355,14 @@ class App(tk.Tk):
                 self.visual_builder.on_show()
             popup.destroy()
 
-        tk.Button(popup, text="Create", command=ok, bg="#059669", fg="white",
+        footer = tk.Frame(popup, bg=UI["hud_bg_2"])
+        footer.pack(fill="x")
+        tk.Button(footer, text="Cancel", command=popup.destroy, bg=UI["neutral"], fg=UI["text"],
+                 relief="flat", font=("Segoe UI",9,"bold"), padx=14, pady=5,
+                 cursor="hand2").pack(side="right", padx=(4, 18), pady=12)
+        tk.Button(footer, text="Create Table", command=ok, bg=UI["accent_2"], fg="white",
                  relief="flat", font=("Segoe UI",9,"bold"), padx=16, pady=5,
-                 cursor="hand2").pack(pady=12)
+                 cursor="hand2").pack(side="right", padx=4, pady=12)
         entry.focus_set()
         popup.bind("<Return>", lambda e: ok())
 
@@ -2069,6 +2503,26 @@ class App(tk.Tk):
         self.notebook.select(self.tab_builder)
         self.visual_builder.on_show()
         self.status.config(text=f"✔ Loaded {len(parsed['tables'])} tables into Visual Builder.")
+
+    def _generate_nosql_code(self):
+        tables = self.er_canvas.tables
+        relations = self.er_canvas.relations
+        if not tables:
+            try:
+                parsed = parse_sql(self.sql_editor.get("1.0", "end"))
+            except Exception as e:
+                messagebox.showerror("NoSQL Generator", str(e))
+                return
+            tables = parsed.get("tables", {})
+            relations = parsed.get("relations", [])
+        if not tables:
+            messagebox.showinfo("NoSQL Generator", "Create a diagram or paste SQL before generating NoSQL code.")
+            return
+        code = tables_to_nosql(tables, relations, self.nosql_provider_var.get())
+        self.sql_editor.delete("1.0", "end")
+        self.sql_editor.insert("1.0", code)
+        self.notebook.select(self.tab_sql)
+        self.status.config(text=f"NoSQL code generated for {self.nosql_provider_var.get()}.")
 
     def _fit(self):
         self.er_canvas.fit_to_screen()

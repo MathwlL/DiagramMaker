@@ -33,8 +33,11 @@ if ($LASTEXITCODE -ne 0) {
     --onefile `
     --windowed `
     --name "DiagramMaker" `
+    --icon "icon.ico" `
     --additional-hooks-dir "pyinstaller_hooks" `
     --add-data "style.css;." `
+    --add-data "icon.ico;." `
+    --add-data "ui/Icons;ui/Icons" `
     --add-data "$tclLib;_tcl_data" `
     --add-data "$tkLib;_tk_data" `
     --add-binary "$tclDll;." `
