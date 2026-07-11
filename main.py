@@ -1480,18 +1480,55 @@ class App(tk.Tk):
                 bg=UI["hud_bg"], fg=UI["text"],
                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 12))
 
-        def menu_btn(text, command=None):
-            tk.Button(topbar, text=text, command=command, bg=UI["hud_bg"], fg=UI["text"],
-                     activebackground=UI["hud_bg_2"], activeforeground=UI["text"],
-                     font=("Segoe UI",8), relief="flat", padx=8, pady=2,
-                     cursor="hand2").pack(side="left")
+        def menu_btn(text, items):
+            b = tk.Button(topbar, text=text, bg=UI["hud_bg"], fg=UI["text"],
+                         activebackground=UI["hud_bg_2"], activeforeground=UI["text"],
+                         font=("Segoe UI",8), relief="flat", padx=8, pady=2,
+                         cursor="hand2")
+            b.pack(side="left")
+            menu = tk.Menu(self, tearoff=0, bg=UI["panel_bg"], fg=UI["text"],
+                          activebackground=UI["accent"], activeforeground="white",
+                          disabledforeground=UI["dim"], relief="flat", bd=1)
+            for item in items:
+                if item is None:
+                    menu.add_separator()
+                    continue
+                label, command, accelerator = item
+                menu.add_command(label=label, command=command, accelerator=accelerator)
+            b.configure(command=lambda btn=b, m=menu: m.post(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height()))
 
-        menu_btn("File")
-        menu_btn("Edit")
-        menu_btn("Diagram")
-        menu_btn("Render")
-        menu_btn("Window")
-        menu_btn("Help")
+        menu_btn("File", [
+            ("New Diagram", self._new_diagram, "Ctrl+N"),
+            ("Open Project", self._open_project, ""),
+            ("Save Project", self._save_project, ""),
+            None,
+            ("Load SQL", self._load_file, "Ctrl+O"),
+            ("Save SQL", self._save_file, "Ctrl+S"),
+        ])
+        menu_btn("Edit", [
+            ("Undo", self._undo, "Ctrl+Z"),
+            ("Delete Selection", self._delete_active_selection, "Del"),
+            None,
+            ("Fit View", self._fit, "F"),
+            ("Reset Layout", self._reset_layout, ""),
+        ])
+        menu_btn("Diagram", [
+            ("Generate Diagram", self._generate, "Ctrl+G"),
+            ("SQL to Builder", self._sql_to_builder, ""),
+            None,
+            ("Add Table", self._diagram_add_table, ""),
+            ("Add Relation", self._diagram_add_relation, ""),
+        ])
+        menu_btn("Window", [
+            ("Layout Workspace", lambda: self.notebook.select(self.tab_diagram), ""),
+            ("SQL Editor", lambda: self.notebook.select(self.tab_sql), ""),
+            ("Visual Builder", lambda: self.notebook.select(self.tab_builder), ""),
+            ("Settings", lambda: self.notebook.select(self.tab_settings), ""),
+        ])
+        menu_btn("Help", [
+            ("Keyboard Shortcuts", self._show_shortcuts, ""),
+            ("About Diagrama Studio", self._show_about, ""),
+        ])
 
         def btn(text, cmd, color=None):
             color = color or UI["accent"]
@@ -1671,6 +1708,8 @@ class App(tk.Tk):
     def _bind_shortcuts(self):
         for seq in ("<Control-z>", "<Control-Z>"):
             self.bind_all(seq, lambda e: self._undo())
+        for seq in ("<Control-n>", "<Control-N>"):
+            self.bind_all(seq, lambda e: self._new_diagram())
         self.bind_all("<Delete>", lambda e: self._delete_active_selection())
         self.bind_all("<BackSpace>", lambda e: self._delete_active_selection())
         self.bind_all("<Control-s>", lambda e: self._save_file())
@@ -1796,6 +1835,41 @@ class App(tk.Tk):
         self.current_project_id = project.id
         self._load_project_payload(project.payload)
         self.status.config(text=f"Project loaded: {project.name} v{project.version}")
+
+    def _new_diagram(self):
+        if self.er_canvas.tables or self.sql_editor.get("1.0", "end").strip():
+            if not messagebox.askyesno("New Diagram", "Clear the current diagram and SQL editor?"):
+                return "break"
+            self._push_undo()
+        self.current_project_id = None
+        self.sql_editor.delete("1.0", "end")
+        self.er_canvas.load({}, [], {})
+        self._refresh_counts()
+        if hasattr(self, "visual_builder"):
+            self.visual_builder.on_show()
+        self.notebook.select(self.tab_diagram)
+        self.status.config(text="New diagram.")
+        return "break"
+
+    def _show_shortcuts(self):
+        messagebox.showinfo(
+            "Keyboard Shortcuts",
+            "Ctrl+N  New diagram\n"
+            "Ctrl+O  Load SQL\n"
+            "Ctrl+S  Save SQL\n"
+            "Ctrl+G  Generate diagram\n"
+            "Ctrl+Z  Undo\n"
+            "Delete  Delete selected table or relation\n"
+            "F       Fit view\n"
+            "Ctrl++  Zoom in\n"
+            "Ctrl+-  Zoom out",
+        )
+
+    def _show_about(self):
+        messagebox.showinfo(
+            "About Diagrama Studio",
+            "Diagrama Studio\n\nA desktop database diagram maker for SQL, ER, UML, Chen, and Crow's Foot notation.",
+        )
 
     def _refresh_counts(self):
         nt = len(self.er_canvas.tables)
