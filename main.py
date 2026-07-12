@@ -14,6 +14,54 @@ try:
 except ImportError:
     PIL_OK = False
 
+import ctypes
+from ctypes import wintypes
+
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+if sys.platform == "win32":
+    user32 = ctypes.windll.user32
+
+    try:
+        _SetWindowLongPtrW = user32.SetWindowLongPtrW
+    except AttributeError:
+        _SetWindowLongPtrW = user32.SetWindowLongW
+    try:
+        _GetWindowLongPtrW = user32.GetWindowLongPtrW
+    except AttributeError:
+        _GetWindowLongPtrW = user32.GetWindowLongW
+
+    _SetWindowLongPtrW.restype = ctypes.c_void_p
+    _SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+    _GetWindowLongPtrW.restype = ctypes.c_void_p
+    _GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+
+    user32.CallWindowProcW.restype = ctypes.c_long
+    user32.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND, ctypes.c_uint,
+                                        wintypes.WPARAM, wintypes.LPARAM]
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, ctypes.c_uint,
+                                  wintypes.WPARAM, wintypes.LPARAM)
+
+GWLP_WNDPROC   = -4
+WM_NCCALCSIZE  = 0x0083
+WM_NCHITTEST   = 0x0084
+WM_NCACTIVATE  = 0x0086
+WM_SIZE        = 0x0005
+SIZE_MAXIMIZED = 2
+SIZE_RESTORED  = 0
+HTCLIENT       = 1
+HTLEFT, HTRIGHT, HTTOP, HTBOTTOM = 10, 11, 12, 15
+HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 16, 17
+RESIZE_BORDER  = 8
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DONOTROUND = 1
 
 #  SQL 
 
@@ -1549,7 +1597,6 @@ class App(tk.Tk):
             self.update_idletasks()
             self._strip_native_titlebar()
             self._is_maximized = False
-            self.bind("<Configure>", self._on_root_configure, add="+")
 
         self._parsed    = {"tables":{}, "relations":[]}
         self._positions = {}
@@ -1606,14 +1653,9 @@ class App(tk.Tk):
             return None
 
     def _strip_native_titlebar(self):
-        """Remove the native title bar from the real Windows window style,
-        while leaving the window otherwise fully managed by the OS (still
-        appears in the taskbar and Alt-Tab, and Windows still handles
-        stacking/focus normally)."""
         if sys.platform != "win32":
             return
         try:
-            import ctypes
             GWL_STYLE = -16
             WS_CAPTION = 0x00C00000
             WS_THICKFRAME = 0x00040000
@@ -1622,15 +1664,62 @@ class App(tk.Tk):
             SWP_NOZORDER = 0x0004
             SWP_FRAMECHANGED = 0x0020
 
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            hwnd = user32.GetParent(self.winfo_id())
+            self._hwnd = hwnd
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
             style = (style & ~WS_CAPTION) | WS_THICKFRAME
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+            user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+
+            try:
+                pref = ctypes.c_int(DWMWCP_DONOTROUND)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                    ctypes.byref(pref), ctypes.sizeof(pref))
+            except Exception:
+                pass
+
+            self._wndproc_ref = WNDPROC(self._wnd_proc)
+            self._old_wndproc = _SetWindowLongPtrW(hwnd, GWLP_WNDPROC, self._wndproc_ref)
         except Exception:
             pass
+
+    def _wnd_proc(self, hwnd, msg, wparam, lparam):
+        if msg == WM_NCCALCSIZE:
+            return 0
+        if msg == WM_NCACTIVATE:
+            return 1
+        if msg == WM_NCHITTEST:
+            return self._hit_test(hwnd, lparam)
+        if msg == WM_SIZE:
+            if wparam == SIZE_MAXIMIZED and not self._is_maximized:
+                self._is_maximized = True
+                self.after_idle(self._refresh_maximize_icon)
+            elif wparam == SIZE_RESTORED and self._is_maximized:
+                self._is_maximized = False
+                self.after_idle(self._refresh_maximize_icon)
+        return user32.CallWindowProcW(self._old_wndproc, hwnd, msg, wparam, lparam)
+
+    def _hit_test(self, hwnd, lparam):
+        if getattr(self, "_is_maximized", False):
+            return HTCLIENT
+        x = ctypes.c_short(lparam & 0xFFFF).value
+        y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        b = RESIZE_BORDER
+        on_left, on_right = x < rect.left + b, x >= rect.right - b
+        on_top, on_bottom = y < rect.top + b, y >= rect.bottom - b
+        if on_top and on_left:     return HTTOPLEFT
+        if on_top and on_right:    return HTTOPRIGHT
+        if on_bottom and on_left:  return HTBOTTOMLEFT
+        if on_bottom and on_right: return HTBOTTOMRIGHT
+        if on_left:   return HTLEFT
+        if on_right:  return HTRIGHT
+        if on_top:    return HTTOP
+        if on_bottom: return HTBOTTOM
+        return HTCLIENT
 
     def _set_thickframe(self, enabled):
         """Toggle the resizable-border style bit. We turn it off while
@@ -1670,7 +1759,16 @@ class App(tk.Tk):
         if not hasattr(self, "_drag_start"):
             return
         sx, sy, wx, wy = self._drag_start
-        self.geometry(f"+{wx + event.x_root - sx}+{wy + event.y_root - sy}")
+        new_x = wx + event.x_root - sx
+        new_y = wy + event.y_root - sy
+        if sys.platform == "win32" and hasattr(self, "_hwnd"):
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(self._hwnd, 0, new_x, new_y, 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+        else:
+            self.geometry(f"+{new_x}+{new_y}")
 
     def _minimize_window(self):
         self.iconify()
@@ -1703,40 +1801,22 @@ class App(tk.Tk):
         return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight()
 
     def _toggle_maximize(self):
-        if getattr(self, "_is_maximized", False):
-            self._set_thickframe(True)
+        if self._is_maximized:
             if self._window_restore_geometry:
                 self.geometry(self._window_restore_geometry)
                 self._window_restore_geometry = None
             self._is_maximized = False
         else:
             self._window_restore_geometry = self.geometry()
-            self._set_thickframe(False)
             x, y, w, h = self._get_work_area()
-            self.geometry(f"{w}x{h}+{x}+{y}")
+            if sys.platform == "win32" and hasattr(self, "_hwnd"):
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                user32.SetWindowPos(self._hwnd, 0, x, y, w, h,
+                                     SWP_NOZORDER | SWP_NOACTIVATE)
+            else:
+                self.geometry(f"{w}x{h}+{x}+{y}")
             self._is_maximized = True
-        self._refresh_maximize_icon()
-
-    def _on_root_configure(self, event):
-        # Safety net: if Windows itself maximizes/snaps the window (Aero
-        # Snap to the top edge, Win+Up, etc.) our own state/icon/border
-        # handling wouldn't know about it. Detect that and reconcile.
-        if event.widget is not self:
-            return
-        if getattr(self, "_is_maximized", False):
-            return
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        if self.winfo_width() >= sw and self.winfo_height() >= sh:
-            self.after(10, self._sync_after_os_maximize)
-
-    def _sync_after_os_maximize(self):
-        if getattr(self, "_is_maximized", False):
-            return
-        self._window_restore_geometry = self._window_restore_geometry or "1440x900"
-        self._is_maximized = True
-        self._set_thickframe(False)
-        x, y, w, h = self._get_work_area()
-        self.geometry(f"{w}x{h}+{x}+{y}")
         self._refresh_maximize_icon()
 
     def _refresh_maximize_icon(self):
@@ -2657,4 +2737,4 @@ class App(tk.Tk):
             self.status.config(text=f"Export failed: {e}")
 
 if __name__ == "__main__":
-    App().mainloop()
+    App().mainloop() 
