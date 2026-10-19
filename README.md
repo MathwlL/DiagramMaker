@@ -1,8 +1,8 @@
 ![Preview](assets/Background.png)
 # Diagrama Studio
 
-Ferramenta desenvolvida em Python para conversão entre scripts SQL e modelagem de dados.  
-O objetivo do projeto é simplificar a criação, visualização e documentação de estruturas de banco de dados por meio de uma interface prática e intuitiva.
+A tool developed in Python for converting between SQL scripts and data modeling.  
+The goal of the project is to simplify the creation, visualization, and documentation of database structures through a practical and intuitive interface.
 
 ---
 
@@ -16,12 +16,12 @@ O objetivo do projeto é simplificar a criação, visualização e documentaçã
 
 ## Features
 
-- Conversão de SQL para diagramas de banco de dados
-- Geração automática de scripts SQL a partir da modelagem
-- Suporte a relacionamentos entre tabelas
-- Interface intuitiva e focada em produtividade
-- Estrutura open source para estudos e contribuições
-- Exportação e organização visual da modelagem de dados
+- Conversion of SQL to database diagrams
+- Automatic generation of SQL scripts from the model
+- Support for table relationships
+- Intuitive, productivity-focused interface
+- Open-source framework for research and contributions
+- Export and visual organization of the data model
 
 ---
 
@@ -32,7 +32,7 @@ O objetivo do projeto é simplificar a criação, visualização e documentaçã
 ---
 ## Download
 
-Baixe a versão mais recente do instalador (BETA):
+Download the latest version of the installer (BETA):
 
 [⬇ Download Diagrama Studio](https://github.com/MathwlL/DiagramMaker/raw/refs/heads/master/releases/DiagramaMakerInstaller.exe)
 
@@ -40,11 +40,11 @@ Baixe a versão mais recente do instalador (BETA):
 
 ## Contributing
 
-Contribuições, melhorias e sugestões são bem-vindas.  
-Sinta-se à vontade para abrir issues ou enviar pull requests.
+Contributions, improvements, and suggestions are welcome.  
+Feel free to open issues or submit pull requests.
 
 ---
 
 ## Disclaimer
 
-Diagrama Studio é um projeto independente e experimental.
+Diagrama Studio is an independent and experimental project.
